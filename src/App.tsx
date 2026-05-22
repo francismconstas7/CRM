@@ -23,7 +23,10 @@ import {
   Info,
   X,
   FileText,
-  UserCheck
+  UserCheck,
+  LogIn,
+  LogOut,
+  User
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Solopreneur, Client, Invoice, FollowUp, InvoiceStatus } from './types';
@@ -49,6 +52,14 @@ export default function App() {
   const [syncMessage, setSyncMessage] = useState<string>('');
   const [isLoadingFromSupabase, setIsLoadingFromSupabase] = useState<boolean>(false);
 
+  // --- Auth Session & UI States ---
+  const [session, setSession] = useState<any>(null);
+  const [authEmail, setAuthEmail] = useState<string>('');
+  const [authPassword, setAuthPassword] = useState<string>('');
+  const [isAuthSignUp, setIsAuthSignUp] = useState<boolean>(false);
+  const [authError, setAuthError] = useState<string>('');
+  const [exploreGuestDemo, setExploreGuestDemo] = useState<boolean>(false);
+
   // --- Persistent LocalState ---
   const [solopreneur, setSolopreneur] = useState<Solopreneur>(() => {
     const saved = localStorage.getItem('crm_solopreneur');
@@ -57,17 +68,17 @@ export default function App() {
 
   const [clients, setClients] = useState<Client[]>(() => {
     const saved = localStorage.getItem('crm_clients');
-    return saved ? JSON.parse(saved) : INITIAL_CLIENTS;
+    return saved ? JSON.parse(saved) : [];
   });
 
   const [invoices, setInvoices] = useState<Invoice[]>(() => {
     const saved = localStorage.getItem('crm_invoices');
-    return saved ? JSON.parse(saved) : INITIAL_INVOICES;
+    return saved ? JSON.parse(saved) : [];
   });
 
   const [followups, setFollowups] = useState<FollowUp[]>(() => {
     const saved = localStorage.getItem('crm_followups');
-    return saved ? JSON.parse(saved) : INITIAL_FOLLOWUPS;
+    return saved ? JSON.parse(saved) : [];
   });
 
   const [darkMode, setDarkMode] = useState<boolean>(() => {
@@ -75,34 +86,131 @@ export default function App() {
     return saved ? JSON.parse(saved) === 'true' : false;
   });
 
-  // Keep localStorage in sync (Offline-first fallback)
+  // Keep localStorage in sync (Offline-first fallback, namespaced by user ID to prevent data bleed)
   useEffect(() => {
-    localStorage.setItem('crm_solopreneur', JSON.stringify(solopreneur));
-  }, [solopreneur]);
+    if (session?.user?.id) {
+      localStorage.setItem(`crm_solopreneur_${session.user.id}`, JSON.stringify(solopreneur));
+    } else if (exploreGuestDemo) {
+      localStorage.setItem('crm_solopreneur_guest', JSON.stringify(solopreneur));
+    } else {
+      localStorage.setItem('crm_solopreneur', JSON.stringify(solopreneur));
+    }
+  }, [solopreneur, session, exploreGuestDemo]);
 
   useEffect(() => {
-    localStorage.setItem('crm_clients', JSON.stringify(clients));
-  }, [clients]);
+    if (session?.user?.id) {
+      localStorage.setItem(`crm_clients_${session.user.id}`, JSON.stringify(clients));
+    } else if (exploreGuestDemo) {
+      localStorage.setItem('crm_clients_guest', JSON.stringify(clients));
+    } else {
+      localStorage.setItem('crm_clients', JSON.stringify(clients));
+    }
+  }, [clients, session, exploreGuestDemo]);
 
   useEffect(() => {
-    localStorage.setItem('crm_invoices', JSON.stringify(invoices));
-  }, [invoices]);
+    if (session?.user?.id) {
+      localStorage.setItem(`crm_invoices_${session.user.id}`, JSON.stringify(invoices));
+    } else if (exploreGuestDemo) {
+      localStorage.setItem('crm_invoices_guest', JSON.stringify(invoices));
+    } else {
+      localStorage.setItem('crm_invoices', JSON.stringify(invoices));
+    }
+  }, [invoices, session, exploreGuestDemo]);
 
   useEffect(() => {
-    localStorage.setItem('crm_followups', JSON.stringify(followups));
-  }, [followups]);
+    if (session?.user?.id) {
+      localStorage.setItem(`crm_followups_${session.user.id}`, JSON.stringify(followups));
+    } else if (exploreGuestDemo) {
+      localStorage.setItem('crm_followups_guest', JSON.stringify(followups));
+    } else {
+      localStorage.setItem('crm_followups', JSON.stringify(followups));
+    }
+  }, [followups, session, exploreGuestDemo]);
 
   useEffect(() => {
     localStorage.setItem('crm_dark_mode', darkMode ? 'true' : 'false');
   }, [darkMode]);
 
-  // --- Automatic solopreneur profile upsert listener ---
+  // Populate guest simulation demo data when guest mode is explicitly selected by clicking the simulation button
+  useEffect(() => {
+    if (exploreGuestDemo && !session) {
+      const savedSolo = localStorage.getItem('crm_solopreneur_guest');
+      const savedClients = localStorage.getItem('crm_clients_guest');
+      const savedInvoices = localStorage.getItem('crm_invoices_guest');
+      const savedFollowups = localStorage.getItem('crm_followups_guest');
+
+      setSolopreneur(savedSolo ? JSON.parse(savedSolo) : INITIAL_SOLOPRENEUR);
+      setClients(savedClients ? JSON.parse(savedClients) : INITIAL_CLIENTS);
+      setInvoices(savedInvoices ? JSON.parse(savedInvoices) : INITIAL_INVOICES);
+      setFollowups(savedFollowups ? JSON.parse(savedFollowups) : INITIAL_FOLLOWUPS);
+    }
+  }, [exploreGuestDemo, session]);
+
+  // --- Subscribe to active Supabase session changes ---
   useEffect(() => {
     if (isSupabaseConfigured && supabase) {
+      // Fetch initial session
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        setSession(session);
+        if (session) {
+          setExploreGuestDemo(false);
+          // Load user-namespaced local cache to avoid fetch flicker
+          const userId = session.user.id;
+          const cachedSolo = localStorage.getItem(`crm_solopreneur_${userId}`);
+          const cachedClients = localStorage.getItem(`crm_clients_${userId}`);
+          const cachedInvoices = localStorage.getItem(`crm_invoices_${userId}`);
+          const cachedFollowups = localStorage.getItem(`crm_followups_${userId}`);
+
+          if (cachedSolo) setSolopreneur(JSON.parse(cachedSolo));
+          if (cachedClients) setClients(JSON.parse(cachedClients));
+          if (cachedInvoices) setInvoices(JSON.parse(cachedInvoices));
+          if (cachedFollowups) setFollowups(JSON.parse(cachedFollowups));
+        }
+      }).catch(err => {
+        console.warn("Could not retrieve initial session, offline-first fallback:", err);
+      });
+
+      // Listen for updates
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        setSession(session);
+        if (session) {
+          setExploreGuestDemo(false);
+          setAuthError('');
+          setAuthEmail('');
+          setAuthPassword('');
+
+          // Load user-namespaced local cache
+          const userId = session.user.id;
+          const cachedSolo = localStorage.getItem(`crm_solopreneur_${userId}`);
+          const cachedClients = localStorage.getItem(`crm_clients_${userId}`);
+          const cachedInvoices = localStorage.getItem(`crm_invoices_${userId}`);
+          const cachedFollowups = localStorage.getItem(`crm_followups_${userId}`);
+
+          if (cachedSolo) setSolopreneur(JSON.parse(cachedSolo));
+          if (cachedClients) setClients(JSON.parse(cachedClients));
+          if (cachedInvoices) setInvoices(JSON.parse(cachedInvoices));
+          if (cachedFollowups) setFollowups(JSON.parse(cachedFollowups));
+        } else {
+          // Wipe state details cleanly on logout
+          setClients([]);
+          setInvoices([]);
+          setFollowups([]);
+        }
+      });
+
+      return () => subscription.unsubscribe();
+    }
+  }, []);
+
+  // --- Automatic solopreneur profile upsert listener ---
+  useEffect(() => {
+    if (isSupabaseConfigured && supabase && session) {
       const timer = setTimeout(async () => {
         try {
+          const userId = session.user.id;
           await supabase.from('crm_solopreneurs').upsert({
-            id: 'default-solo',
+            id: `solo-${userId}`,
+            user_id: userId,
             business_name: solopreneur.businessName,
             whatsapp_template: solopreneur.whatsappTemplate,
             sms_template: solopreneur.smsTemplate
@@ -113,26 +221,52 @@ export default function App() {
       }, 1000);
       return () => clearTimeout(timer);
     }
-  }, [solopreneur]);
+  }, [solopreneur, session]);
 
   // --- Live Mount Database Hydration ---
   useEffect(() => {
     async function loadData() {
       if (!isSupabaseConfigured || !supabase) {
         setSupabaseStatus('unconfigured');
-        setSyncMessage('Not connected to cloud database');
+        setSyncMessage('Local Mode: Set VITE_SUPABASE_* keys to sync');
+        return;
+      }
+
+      // If we are NOT logged in, revert to local settings/INITIAL demo models ONLY if explicitly exploring guest mode.
+      if (!session) {
+        setSupabaseStatus('unconfigured');
+        if (exploreGuestDemo) {
+          setSyncMessage('Guest simulation sandbox active.');
+          const savedSolo = localStorage.getItem('crm_solopreneur_guest');
+          const savedClients = localStorage.getItem('crm_clients_guest');
+          const savedInvoices = localStorage.getItem('crm_invoices_guest');
+          const savedFollowups = localStorage.getItem('crm_followups_guest');
+
+          setSolopreneur(savedSolo ? JSON.parse(savedSolo) : INITIAL_SOLOPRENEUR);
+          setClients(savedClients ? JSON.parse(savedClients) : INITIAL_CLIENTS);
+          setInvoices(savedInvoices ? JSON.parse(savedInvoices) : INITIAL_INVOICES);
+          setFollowups(savedFollowups ? JSON.parse(savedFollowups) : INITIAL_FOLLOWUPS);
+        } else {
+          setSyncMessage('Connect cloud database to sync.');
+          setClients([]);
+          setInvoices([]);
+          setFollowups([]);
+        }
         return;
       }
       
       try {
         setSupabaseStatus('syncing');
-        setSyncMessage('Fetching latest business data...');
+        setSyncMessage('Fetching your cloud accounts...');
         setIsLoadingFromSupabase(true);
 
-        // 1. Load Solopreneur
+        const userId = session.user.id;
+
+        // 1. Fetch user-specific Solopreneur Settings
         const { data: rawSolos, error: soloErr } = await supabase
           .from('crm_solopreneurs')
           .select('*')
+          .eq('user_id', userId)
           .limit(1);
           
         if (soloErr) throw soloErr;
@@ -145,22 +279,28 @@ export default function App() {
             smsTemplate: s.sms_template
           });
         } else {
-          // If no row exists, create it using local state
-          await supabase.from('crm_solopreneurs').insert({
-            id: 'default-solo',
-            business_name: solopreneur.businessName,
-            whatsapp_template: solopreneur.whatsappTemplate,
-            sms_template: solopreneur.smsTemplate
+          // If no row exists, create it using simple initial defaults for this user
+          const defaultSoloDetails = {
+            id: `solo-${userId}`,
+            user_id: userId,
+            business_name: "Apex Craft & Repairs",
+            whatsapp_template: INITIAL_SOLOPRENEUR.whatsappTemplate,
+            sms_template: INITIAL_SOLOPRENEUR.smsTemplate
+          };
+          await supabase.from('crm_solopreneurs').insert(defaultSoloDetails);
+          setSolopreneur({
+            businessName: defaultSoloDetails.business_name,
+            whatsappTemplate: defaultSoloDetails.whatsapp_template,
+            smsTemplate: defaultSoloDetails.sms_template
           });
         }
 
-        // 2. Load Clients
+        // 2. Load User-Specific Clients
         const { data: rawClients, error: clientsErr } = await supabase
           .from('crm_clients')
-          .select('*');
+          .select('*')
+          .eq('user_id', userId);
         if (clientsErr) throw clientsErr;
-
-        const currentLocalClients = [...clients];
 
         if (rawClients && rawClients.length > 0) {
           const formattedClients: Client[] = rawClients.map(c => ({
@@ -173,28 +313,17 @@ export default function App() {
             createdAt: c.created_at
           }));
           setClients(formattedClients);
-        } else if (currentLocalClients.length > 0) {
-          // Seed cloud if empty with current local records
-          for (const c of currentLocalClients) {
-            await supabase.from('crm_clients').insert({
-              id: c.id,
-              name: c.name,
-              phone: c.phone,
-              email: c.email,
-              notes: c.notes,
-              status: c.status,
-              created_at: c.createdAt
-            });
-          }
+        } else {
+          // Start completely blank for non-seeded registered accounts (no default/demo data!)
+          setClients([]);
         }
 
-        // 3. Load Invoices
+        // 3. Load User-Specific Invoices
         const { data: rawInvoices, error: invErr } = await supabase
           .from('crm_invoices')
-          .select('*');
+          .select('*')
+          .eq('user_id', userId);
         if (invErr) throw invErr;
-
-        const currentLocalInvoices = [...invoices];
 
         if (rawInvoices && rawInvoices.length > 0) {
           const formattedInvoices: Invoice[] = rawInvoices.map(i => ({
@@ -206,26 +335,16 @@ export default function App() {
             description: i.description
           }));
           setInvoices(formattedInvoices);
-        } else if (currentLocalInvoices.length > 0) {
-          for (const i of currentLocalInvoices) {
-            await supabase.from('crm_invoices').insert({
-              id: i.id,
-              client_id: i.clientId,
-              amount: i.amount,
-              status: i.status,
-              due_date: i.dueDate,
-              description: i.description
-            });
-          }
+        } else {
+          setInvoices([]);
         }
 
-        // 4. Load Follow-ups
+        // 4. Load User-Specific Follow-ups
         const { data: rawFollowups, error: followErr } = await supabase
           .from('crm_followups')
-          .select('*');
+          .select('*')
+          .eq('user_id', userId);
         if (followErr) throw followErr;
-
-        const currentLocalFollowups = [...followups];
 
         if (rawFollowups && rawFollowups.length > 0) {
           const formattedFollowups: FollowUp[] = rawFollowups.map(f => ({
@@ -236,31 +355,23 @@ export default function App() {
             completed: f.completed
           }));
           setFollowups(formattedFollowups);
-        } else if (currentLocalFollowups.length > 0) {
-          for (const f of currentLocalFollowups) {
-            await supabase.from('crm_followups').insert({
-              id: f.id,
-              client_id: f.clientId,
-              date: f.date,
-              description: f.description,
-              completed: f.completed
-            });
-          }
+        } else {
+          setFollowups([]);
         }
 
         setSupabaseStatus('connected');
-        setSyncMessage('Synchronized with cloud database!');
+        setSyncMessage('Cloud database sync active!');
       } catch (err: any) {
-        console.error("Supabase sync failed, continuing offline:", err);
+        console.error("Supabase load failed, keeping offline mode:", err);
         setSupabaseStatus('error');
-        setSyncMessage(err.message || 'Connection failure');
+        setSyncMessage(err.message || 'Verification failure');
       } finally {
         setIsLoadingFromSupabase(false);
       }
     }
 
     loadData();
-  }, [isSupabaseConfigured]);
+  }, [session, isSupabaseConfigured]);
 
 
   // --- Active Session Navigation ---
@@ -457,8 +568,10 @@ export default function App() {
     // Background push to Supabase (Non-blocking)
     if (isSupabaseConfigured && supabase) {
       try {
-        // 1. Insert Client
-        await supabase.from('crm_clients').insert({
+        const userId = session?.user?.id;
+        
+        // 1. Insert Client with optional user_id linkage
+        const clientData: any = {
           id: newClientObj.id,
           name: newClientObj.name,
           phone: newClientObj.phone,
@@ -466,29 +579,35 @@ export default function App() {
           notes: newClientObj.notes,
           status: newClientObj.status,
           created_at: newClientObj.createdAt
-        });
+        };
+        if (userId) clientData.user_id = userId;
+        await supabase.from('crm_clients').insert(clientData);
 
         // 2. Insert Invoice if available
         if (newInvoiceObj) {
-          await supabase.from('crm_invoices').insert({
+          const invoiceData: any = {
             id: newInvoiceObj.id,
             client_id: newInvoiceObj.clientId,
             amount: newInvoiceObj.amount,
             status: newInvoiceObj.status,
             due_date: newInvoiceObj.dueDate,
             description: newInvoiceObj.description
-          });
+          };
+          if (userId) invoiceData.user_id = userId;
+          await supabase.from('crm_invoices').insert(invoiceData);
         }
 
         // 3. Insert Followup if available
         if (newFollowUpObj) {
-          await supabase.from('crm_followups').insert({
+          const followupData: any = {
             id: newFollowUpObj.id,
             client_id: newFollowUpObj.clientId,
             date: newFollowUpObj.date,
             description: newFollowUpObj.description,
             completed: newFollowUpObj.completed
-          });
+          };
+          if (userId) followupData.user_id = userId;
+          await supabase.from('crm_followups').insert(followupData);
         }
       } catch (err) {
         console.error("Supabase quickadd sync failed:", err);
@@ -543,7 +662,7 @@ export default function App() {
     if (isSupabaseConfigured && supabase) {
       supabase
         .from('crm_followups')
-        .update({ completed: !followups.find(f => f.id === fId)?.completed })
+        .update({ completed: nextCompl })
         .eq('id', fId)
         .then(({ error }) => {
           if (error) console.error("Cloud schedule updating failed:", error);
@@ -595,14 +714,17 @@ export default function App() {
 
     // Sync state
     if (isSupabaseConfigured && supabase) {
-      supabase.from('crm_invoices').insert({
+      const userId = session?.user?.id;
+      const invoiceData: any = {
         id: newInv.id,
         client_id: newInv.clientId,
         amount: newInv.amount,
         status: newInv.status,
         due_date: newInv.dueDate,
         description: newInv.description
-      }).then(({ error }) => {
+      };
+      if (userId) invoiceData.user_id = userId;
+      supabase.from('crm_invoices').insert(invoiceData).then(({ error }) => {
         if (error) console.error("Cloud invoice insert failed:", error);
       });
     }
@@ -631,13 +753,16 @@ export default function App() {
 
     // Sync state
     if (isSupabaseConfigured && supabase) {
-      supabase.from('crm_followups').insert({
+      const userId = session?.user?.id;
+      const followupData: any = {
         id: newF.id,
         client_id: newF.clientId,
         date: newF.date,
         description: newF.description,
         completed: newF.completed
-      }).then(({ error }) => {
+      };
+      if (userId) followupData.user_id = userId;
+      supabase.from('crm_followups').insert(followupData).then(({ error }) => {
         if (error) console.error("Cloud followup insert failed:", error);
       });
     }
@@ -676,29 +801,47 @@ export default function App() {
 
   // Seed data trigger in case they delete everything
   const handleResetStorage = async () => {
-    if (confirm("Reset application to initial demo dataset? This will clear local memory and sync initial details.")) {
+    if (confirm("Reset application workspace? This will clear your current view and synchronize a clean state.")) {
       localStorage.clear();
-      setSolopreneur(INITIAL_SOLOPRENEUR);
-      setClients(INITIAL_CLIENTS);
-      setInvoices(INITIAL_INVOICES);
-      setFollowups(INITIAL_FOLLOWUPS);
       setSelectedClientId(null);
       setActiveTab('dashboard');
 
-      // Clear cloud database tables as well if configured
+      if (!session) {
+        // Safe Guest offline reset
+        setSolopreneur(INITIAL_SOLOPRENEUR);
+        setClients(INITIAL_CLIENTS);
+        setInvoices(INITIAL_INVOICES);
+        setFollowups(INITIAL_FOLLOWUPS);
+        return;
+      }
+
+      // Clear only this logged in user's records from cloud database! Multi-user safe.
       if (isSupabaseConfigured && supabase) {
         try {
+          const userId = session.user.id;
           setSyncMessage("Cleaning cloud tables...");
-          await supabase.from('crm_followups').delete().neq('id', 'keep-alive');
-          await supabase.from('crm_invoices').delete().neq('id', 'keep-alive');
-          await supabase.from('crm_clients').delete().neq('id', 'keep-alive');
+          await supabase.from('crm_followups').delete().eq('user_id', userId);
+          await supabase.from('crm_invoices').delete().eq('user_id', userId);
+          await supabase.from('crm_clients').delete().eq('user_id', userId);
+          
           await supabase.from('crm_solopreneurs').upsert({
-            id: 'default-solo',
-            business_name: INITIAL_SOLOPRENEUR.businessName,
+            id: `solo-${userId}`,
+            user_id: userId,
+            business_name: "Apex Craft & Repairs",
             whatsapp_template: INITIAL_SOLOPRENEUR.whatsappTemplate,
             sms_template: INITIAL_SOLOPRENEUR.smsTemplate
           });
-          setSyncMessage("Cloud cleared & re-synchronized!");
+          
+          setSolopreneur({
+            businessName: "Apex Craft & Repairs",
+            whatsappTemplate: INITIAL_SOLOPRENEUR.whatsappTemplate,
+            smsTemplate: INITIAL_SOLOPRENEUR.smsTemplate
+          });
+          setClients([]);
+          setInvoices([]);
+          setFollowups([]);
+
+          setSyncMessage("Cloud tables reset successfully!");
         } catch (e) {
           console.warn("Cloud cleanup skipped:", e);
         }
@@ -707,293 +850,487 @@ export default function App() {
   };
 
   return (
-    <div id="app-root-container" className={`${darkMode ? 'dark' : ''} w-full min-h-screen bg-slate-100 dark:bg-slate-900 transition-colors duration-300 md:p-6 flex flex-col items-center justify-center`}>
+    <div id="app-root-container" className={`${darkMode ? 'dark' : ''} w-full min-h-screen bg-slate-50 dark:bg-slate-950 transition-colors duration-300 flex flex-col`}>
       
-      {/* Device wrapper to ensure amazing aesthetic first impression (acts like an iPhone/Android Screen mockup centered on desktop but fully fluid on actual mobile) */}
-      <div id="phone-frame" className="relative w-full max-w-md h-full min-h-[100vh] md:min-h-[840px] md:h-[840px] bg-slate-50 dark:bg-slate-950 md:rounded-3xl shadow-2xl flex flex-col overflow-hidden border border-slate-200/50 dark:border-slate-800/80">
+      {/* Fully responsive content frame: occupies full width and height on desktop correctly, fluid adaptation on mobile screen */}
+      <div id="phone-frame" className="relative flex-1 w-full bg-slate-50 dark:bg-slate-950 flex flex-col">
         
-        {/* Device Status Bar Element (Shows current simulated context nicely) */}
-        <div id="device-header" className="hidden md:flex justify-between items-center px-6 pt-3 pb-2 text-[11px] font-mono font-medium tracking-tight text-slate-400 dark:text-slate-500 border-b border-slate-100 dark:border-slate-900 bg-slate-50/50 dark:bg-slate-950/50 select-none">
-          <span>{solopreneur.businessName}</span>
-          <div className="flex items-center gap-2">
-            <span>2026-05-21 UTC</span>
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-          </div>
-        </div>
+        {/* Auth Screen Gate: Shown when Supabase is configured but user is not signed in and has not chosen mock guest mode */}
+        {isSupabaseConfigured && !session && !exploreGuestDemo ? (
+          <div id="auth-screen-gate" className="flex-1 flex flex-col justify-center items-center p-6 bg-slate-50 dark:bg-slate-950 font-sans">
+            <div className="w-full max-w-sm space-y-6">
+              
+              {/* Core CRM Branded Header */}
+              <div className="text-center space-y-2">
+                <div className="inline-flex p-3 bg-indigo-50 dark:bg-indigo-950/40 rounded-2xl border border-indigo-150/10 text-indigo-600 dark:text-indigo-400 mb-2 shadow-xs">
+                  <Sparkles className="h-6 w-6" />
+                </div>
+                <h2 className="text-xl font-extrabold tracking-tight text-slate-900 dark:text-white font-sans">
+                  ApexCRM Cloud Workspace
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 max-w-xs mx-auto">
+                  Please register or sign in below with your email to access, synchronize, and update your personal CRM data.
+                </p>
+              </div>
 
-        {/* Dismissable Demo Banner Infotip */}
-        <AnimatePresence>
-          {showWelcomeTip && (
-            <motion.div 
-              id="feature-tip-alert"
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-3.5 text-xs relative overflow-hidden shrink-0 shadow-md"
-            >
-              <div className="flex gap-2.5 items-start pr-6">
-                <Sparkles className="h-4 w-4 shrink-0 text-amber-300 mt-0.5" />
+              {/* Input Card Container */}
+              <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200/50 dark:border-slate-800/80 shadow-md space-y-4">
+                <div className="flex border-b border-slate-100 dark:border-slate-800 text-xs font-semibold">
+                  <button
+                    id="signin-tab-btn"
+                    type="button"
+                    onClick={() => { setIsAuthSignUp(false); setAuthError(''); }}
+                    className={`flex-1 pb-2 border-b-2 text-center transition-all ${!isAuthSignUp ? 'border-indigo-500 text-indigo-600 font-bold dark:text-indigo-400' : 'border-transparent text-slate-400 hover:text-slate-500'}`}
+                  >
+                    Sign In
+                  </button>
+                  <button
+                    id="signup-tab-btn"
+                    type="button"
+                    onClick={() => { setIsAuthSignUp(true); setAuthError(''); }}
+                    className={`flex-1 pb-2 border-b-2 text-center transition-all ${isAuthSignUp ? 'border-indigo-500 text-indigo-600 font-bold dark:text-indigo-400' : 'border-transparent text-slate-400 hover:text-slate-500'}`}
+                  >
+                    Sign Up
+                  </button>
+                </div>
+
+                <form onSubmit={isAuthSignUp ? (async (e) => {
+                  e.preventDefault();
+                  if (!authEmail || !authPassword) {
+                    setAuthError('Please fill in both email and password.');
+                    return;
+                  }
+                  if (authPassword.length < 6) {
+                    setAuthError('Password must be at least 6 characters.');
+                    return;
+                  }
+                  try {
+                    setIsLoadingFromSupabase(true);
+                    setAuthError('');
+                    const { error } = await supabase!.auth.signUp({
+                      email: authEmail,
+                      password: authPassword,
+                    });
+                    if (error) throw error;
+                    alert('Registration successful! Check your email for verification if enabled, or sign in now.');
+                    setIsAuthSignUp(false);
+                    setAuthPassword('');
+                  } catch (err: any) {
+                    setAuthError(err.message || 'Error occurred during registration.');
+                  } finally {
+                    setIsLoadingFromSupabase(false);
+                  }
+                }) : (async (e) => {
+                  e.preventDefault();
+                  if (!authEmail || !authPassword) {
+                    setAuthError('Please fill in both email and password.');
+                    return;
+                  }
+                  try {
+                    setIsLoadingFromSupabase(true);
+                    setAuthError('');
+                    const { error } = await supabase!.auth.signInWithPassword({
+                      email: authEmail,
+                      password: authPassword,
+                    });
+                    if (error) throw error;
+                  } catch (err: any) {
+                    setAuthError(err.message || 'Invalid email or password.');
+                  } finally {
+                    setIsLoadingFromSupabase(false);
+                  }
+                })} className="space-y-3.5">
+                  {authError && (
+                    <div id="auth-error-notif" className="p-2.5 bg-rose-50 dark:bg-rose-950/20 text-rose-600 dark:text-rose-400 text-[10px] rounded-lg border border-rose-150/10 flex items-start gap-1.5 font-sans leading-normal">
+                      <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <span>{authError}</span>
+                    </div>
+                  )}
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Email Address</label>
+                    <input
+                      id="auth-email-input"
+                      type="email"
+                      placeholder="you@example.com"
+                      required
+                      value={authEmail}
+                      onChange={(e) => setAuthEmail(e.target.value)}
+                      className="w-full bg-slate-50 dark:bg-slate-950 text-xs px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:focus:ring-indigo-400 text-slate-900 dark:text-white"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">Password</label>
+                    <input
+                      id="auth-password-input"
+                      type="password"
+                      placeholder="••••••••"
+                      required
+                      value={authPassword}
+                      onChange={(e) => setAuthPassword(e.target.value)}
+                      className="w-full bg-slate-50 dark:bg-slate-950 text-xs px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500 dark:focus:ring-indigo-400 text-slate-900 dark:text-white"
+                    />
+                  </div>
+
+                  <button
+                    id="auth-submit-btn"
+                    type="submit"
+                    disabled={isLoadingFromSupabase}
+                    className="mt-2 w-full flex items-center justify-center bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-350 text-white font-semibold py-2 px-3 text-xs rounded-lg transition-colors cursor-pointer"
+                  >
+                    {isLoadingFromSupabase ? "Communicating..." : (isAuthSignUp ? "Create Secure Account" : "Access CRM Workspace")}
+                  </button>
+                </form>
+              </div>
+
+              {/* Demo Mode Button */}
+              <div className="text-center font-sans">
+                <button
+                  id="auth-demo-mode-btn"
+                  type="button"
+                  onClick={() => { setExploreGuestDemo(true); }}
+                  className="text-[10px] font-semibold text-indigo-600 hover:text-indigo-500 dark:text-indigo-400 underline"
+                >
+                  Explore as Guest with Simulation Dataset &rarr;
+                </button>
+              </div>
+
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Dismissable Demo Banner Infotip */}
+            <AnimatePresence>
+              {showWelcomeTip && (
+                <motion.div 
+                  id="feature-tip-alert"
+                  initial={{ height: 0, opacity: 0 }}
+                  animate={{ height: 'auto', opacity: 1 }}
+                  exit={{ height: 0, opacity: 0 }}
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-3.5 text-xs relative overflow-hidden shrink-0 shadow-md"
+                >
+                  <div className="flex gap-2.5 items-start pr-6">
+                    <Sparkles className="h-4 w-4 shrink-0 text-amber-300 mt-0.5" />
+                    <div>
+                      <p className="font-semibold mb-1">Interactive Micro-CRM</p>
+                      <p className="text-blue-100 leading-relaxed font-sans">
+                        Tap metrics to check balance dues. Click client cards to fire dynamic SMS or WhatsApp templates with smart placeholders substituted in 3 seconds!
+                      </p>
+                    </div>
+                  </div>
+                  <button 
+                    id="close-tip-btn"
+                    onClick={() => setShowWelcomeTip(false)}
+                    className="absolute top-2.5 right-2 text-white/80 hover:text-white p-1 hover:bg-white/10 rounded-full transition-colors"
+                    title="Dismiss tip"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* Global Toolbar Header - Hosts Custom Designed Logo & Top Right Login/Logout Buttons */}
+            <header id="app-header" className="px-5 py-3 bg-white dark:bg-slate-900 border-b border-slate-200/60 dark:border-slate-800/60 flex justify-between items-center shrink-0">
+              {/* BEAUTIFUL CUSTOM DESIGNED BRAND LOGO AND MONOGRAM */}
+              <div className="flex items-center gap-3 p-1">
+                <div className="p-2 bg-gradient-to-tr from-indigo-500 via-indigo-600 to-blue-600 dark:from-indigo-600 dark:to-blue-700 rounded-xl shadow-md text-white flex items-center justify-center shrink-0">
+                  <svg className="w-5.5 h-5.5" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-label="Apex CRM Custom Brand Logo">
+                    <path d="M12 2L2 21H22L12 2Z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                    <path d="M12 7L6 18H18L12 7Z" fill="currentColor" fillOpacity="0.2" />
+                    <circle cx="12" cy="14" r="2.5" fill="#FFFFFF" className="dark:fill-slate-900" />
+                  </svg>
+                </div>
                 <div>
-                  <p className="font-semibold mb-1">Interactive Micro-CRM</p>
-                  <p className="text-blue-100 leading-relaxed">
-                    Tap metrics to check balance dues. Click client cards to fire dynamic SMS or WhatsApp templates with smart placeholders substituted in 3 seconds!
-                  </p>
+                  <h1 className="text-sm font-extrabold tracking-tight text-slate-900 dark:text-white flex items-center gap-1.5 font-sans leading-none">
+                    <span>ApexCRM</span>
+                    <span className="text-[9px] font-bold text-white bg-indigo-600 dark:bg-indigo-500 px-1.5 py-0.5 rounded-full shadow-xs">PRO</span>
+                  </h1>
+                  <span className="text-[10.5px] font-semibold text-zinc-400 dark:text-slate-500 block mt-1 tracking-tight">{solopreneur.businessName}</span>
                 </div>
               </div>
-              <button 
-                id="close-tip-btn"
-                onClick={() => setShowWelcomeTip(false)}
-                className="absolute top-2.5 right-2 text-white/80 hover:text-white p-1 hover:bg-white/10 rounded-full transition-colors"
-                title="Dismiss tip"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </motion.div>
-          )}
-        </AnimatePresence>
 
-        {/* Global Toolbar Header */}
-        <header id="app-header" className="px-5 py-4 bg-white dark:bg-slate-900 border-b border-slate-200/60 dark:border-slate-800/60 flex justify-between items-center shrink-0">
-          <div>
-            <span className="text-[10px] uppercase tracking-wider font-bold text-indigo-600 dark:text-indigo-400">Micro CRM for Solos</span>
-            <h1 className="text-xl font-bold text-slate-900 dark:text-white leading-tight">
-              {solopreneur.businessName || "My Business"}
-            </h1>
-          </div>
-          <div className="flex items-center gap-1.5">
-            {/* Quick reset/seed data trigger */}
-            <button
-              id="reset-demo-btn"
-              onClick={handleResetStorage}
-              className="p-2 text-slate-400 hover:text-indigo-500 dark:text-slate-500 dark:hover:text-indigo-400 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-              title="Reset initial demo data"
-            >
-              <Info className="h-4 w-4" />
-            </button>
+              {/* ACTION TOOLBAR & SIGN IN/OUT CONTRELS */}
+              <div className="flex items-center gap-3">
+                {/* Theme toggle slider */}
+                <button
+                  id="theme-toggle-btn"
+                  onClick={() => setDarkMode(!darkMode)}
+                  className="p-1.5 text-slate-400 hover:text-slate-700 dark:text-slate-500 dark:hover:text-slate-300 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+                  title={darkMode ? "Switch to light theme" : "Switch to dark theme"}
+                >
+                  {darkMode ? <Sun className="h-4 w-4 text-amber-500" /> : <Moon className="h-4 w-4" />}
+                </button>
 
-            {/* Dark & Light Theme Slider Icon */}
-            <button
-              id="theme-toggle-btn"
-              onClick={() => setDarkMode(!darkMode)}
-              className="p-2 text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-              title={darkMode ? "Switch to light mode" : "Switch to dark mode"}
-            >
-              {darkMode ? <Sun className="h-4.5 w-4.5 text-amber-400" /> : <Moon className="h-4.5 w-4.5" />}
-            </button>
-          </div>
-        </header>
-
-        {/* Supabase Sync Status Indicator Stripe */}
-        <div id="supabase-sync-indicator" className="px-5 py-1.5 bg-slate-100 dark:bg-slate-900 border-b border-slate-200/50 dark:border-slate-800/40 flex items-center justify-between text-[10px] font-mono select-none shrink-0">
-          <div className="flex items-center gap-1.5">
-            <span className={`w-1.5 h-1.5 rounded-full ${
-              supabaseStatus === 'connected' ? 'bg-emerald-500 animate-pulse' :
-              supabaseStatus === 'syncing' ? 'bg-amber-400 animate-pulse' :
-              supabaseStatus === 'error' ? 'bg-rose-500' : 'bg-slate-400'
-            }`}></span>
-            <span className="text-slate-500 dark:text-slate-400 font-medium">
-              {supabaseStatus === 'connected' ? 'Supabase Cloud Synced' :
-               supabaseStatus === 'syncing' ? 'Syncing...' :
-               supabaseStatus === 'error' ? 'Sync Offline (Error)' : 'Local Memory Only'}
-            </span>
-          </div>
-          <span className="text-slate-400 dark:text-slate-500 text-[9px] truncate max-w-[200px]">
-            {syncMessage || (!isSupabaseConfigured ? 'Setup VITE_SUPABASE_* keys to connect!' : 'Local Storage active')}
-          </span>
-        </div>
-
-        {/* Application Core Scroll Frame Viewport */}
-        <main id="app-main-viewport" className="flex-1 overflow-y-auto px-4 py-4 space-y-5 bg-slate-50 dark:bg-slate-950 pb-20">
-          
-          <AnimatePresence mode="wait">
-            {/* VIEW A: CENTRAL DASHBOARD */}
-            {activeTab === 'dashboard' && (
-              <motion.div
-                key="dashboard-view"
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -10 }}
-                className="space-y-5"
-              >
-                {/* 1. TOP SUMMARY METRIC METERS */}
-                <div id="dashboard-metric-grid" className="grid grid-cols-3 gap-2.5">
-                  {/* Revenue metrics */}
-                  <div 
-                    id="total-revenue-stat"
-                    onClick={() => { setActiveTab('invoices'); setInvoiceFilter('Paid'); }}
-                    className="cursor-pointer bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200/50 dark:border-slate-800/80 hover:border-indigo-500 dark:hover:border-indigo-400 transition-colors shadow-xs"
-                  >
-                    <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium block leading-tight">Paid Recv</span>
-                    <div className="flex items-baseline gap-0.5 mt-1">
-                      <span className="text-base font-bold text-slate-900 dark:text-white leading-none">${revenueThisMonth}</span>
+                {/* Cloud Auth actions */}
+                {isSupabaseConfigured && (
+                  session ? (
+                    <div className="flex items-center gap-2">
+                      <span className="hidden sm:inline-block text-[10px] text-slate-400 dark:text-slate-500 font-mono truncate max-w-[120px]" title={session.user.email}>
+                        {session.user.email}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (supabase) {
+                            await supabase.auth.signOut();
+                            setSession(null);
+                            setSolopreneur(INITIAL_SOLOPRENEUR);
+                            setClients([]);
+                            setInvoices([]);
+                            setFollowups([]);
+                          }
+                        }}
+                        className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-lg border border-slate-200/50 dark:border-slate-800 transition-colors cursor-pointer"
+                        title="Log out of account"
+                      >
+                        <LogOut className="h-3 w-3" />
+                        <span>Logout</span>
+                      </button>
                     </div>
-                    <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-semibold mt-1 block">Full Total</span>
-                  </div>
-
-                  {/* Overdue Payments stats click actions for quick filtration */}
-                  <div 
-                    id="overdue-payments-stat"
-                    onClick={() => { setActiveTab('invoices'); setInvoiceFilter('Overdue'); }}
-                    className={`cursor-pointer bg-red-50/40 dark:bg-red-950/20 p-3 rounded-2xl border transition-colors shadow-xs ${overdueData.count > 0 ? 'border-red-200 dark:border-red-900/50' : 'border-slate-200/50 dark:border-slate-800/80'}`}
-                  >
-                    <span className="text-[10px] text-red-600 dark:text-red-400 font-medium block leading-tight">Overdue</span>
-                    <div className="flex items-baseline gap-0.5 mt-1">
-                      <span className="text-base font-bold text-red-600 dark:text-red-500 leading-none">${overdueData.amount}</span>
-                    </div>
-                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400 mt-1">
-                      {overdueData.count} pending
-                    </span>
-                  </div>
-
-                  {/* Followups Stat */}
-                  <div 
-                    id="today-followups-stat"
-                    className="bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200/50 dark:border-slate-800/80 shadow-xs"
-                  >
-                    <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium block leading-tight">Tasks Today</span>
-                    <div className="flex items-baseline gap-0.5 mt-1">
-                      <span className="text-base font-bold text-slate-900 dark:text-white leading-none">{followupsTodayCount}</span>
-                    </div>
-                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 mt-1">
-                      Due 21st
-                    </span>
-                  </div>
-                </div>
-
-                {/* 2. DYNAMIC LIST 1: URGENT PAYMENTS DUE */}
-                <div id="urgent-payments-deck" className="space-y-2.5">
-                  <div className="flex justify-between items-center">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                      ⚠️ Urgent Payments Due
-                    </h3>
-                    <button 
-                      onClick={() => setActiveTab('invoices')}
-                      className="text-[11px] text-indigo-600 hover:text-indigo-400 font-medium"
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => { setExploreGuestDemo(false); }}
+                      className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-bold bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg shadow-xs transition-colors"
+                      title="Access cloud storage"
                     >
-                      View all
+                      <LogIn className="h-3 w-3" />
+                      <span>Log In / Sign Up</span>
                     </button>
-                  </div>
+                  )
+                )}
 
-                  <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
-                    {urgentPayments.length === 0 ? (
-                      <div className="bg-white dark:bg-slate-900/50 border border-slate-100 dark:border-slate-800/60 p-5 rounded-2xl text-center">
-                        <Check className="h-6 w-6 text-emerald-500 mx-auto mb-1.5" />
-                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">Zero Overdue Balances</p>
-                        <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">All clients are fully clear!</p>
-                      </div>
-                    ) : (
-                      urgentPayments.slice(0, 4).map((invoice) => (
-                        <div 
-                          key={invoice.id}
-                          className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200/50 dark:border-slate-800/80 hover:border-slate-300 dark:hover:border-slate-700 flex justify-between items-center transition-all cursor-pointer shadow-2xs"
-                          onClick={() => invoice.clientId && setSelectedClientId(invoice.clientId)}
-                        >
-                          <div className="space-y-0.5">
-                            <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                              {invoice.client ? invoice.client.name : "Walk-in Customer"}
-                            </h4>
-                            <div className="flex items-center gap-1.5 text-[10px] text-slate-400 dark:text-slate-500 font-mono">
-                              <span>Due {formatDate(invoice.dueDate)}</span>
-                              <span>•</span>
-                              <span className="text-red-500/80">{invoice.description}</span>
-                            </div>
-                          </div>
-                          
-                          <div className="text-right flex items-center gap-2">
-                            <div>
-                              <span className="text-xs font-bold text-slate-900 dark:text-white block">${invoice.amount}</span>
-                              <span className={`text-[8px] px-1.5 py-0.5 rounded-full font-bold uppercase tracking-wider ${
-                                invoice.status === 'Overdue' 
-                                  ? 'bg-red-100 dark:bg-red-950/50 text-red-600' 
-                                  : 'bg-amber-100 dark:bg-amber-950/50 text-amber-600'
-                              }`}>
-                                {invoice.status}
-                              </span>
-                            </div>
-                            <ChevronRight className="h-4 w-4 text-slate-300" />
-                          </div>
+                {/* Quick reset/seed database info btn */}
+                <button
+                  id="reset-demo-btn"
+                  onClick={handleResetStorage}
+                  className="p-1.5 text-slate-400 hover:text-zinc-600 dark:text-slate-500 dark:hover:text-slate-400 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
+                  title="Initialize workspace or clear data"
+                >
+                  <Info className="h-4 w-4" />
+                </button>
+              </div>
+            </header>
+
+            {/* Supabase Sync Status Indicator Stripe */}
+            <div id="supabase-sync-indicator" className="px-5 py-1.5 bg-slate-100 dark:bg-slate-900 border-b border-slate-200/50 dark:border-slate-800/40 flex items-center justify-between text-[10px] font-mono select-none shrink-0">
+              <div className="flex items-center gap-1.5">
+                <span className={`w-1.5 h-1.5 rounded-full ${
+                  supabaseStatus === 'connected' ? 'bg-emerald-500 animate-pulse' :
+                  supabaseStatus === 'syncing' ? 'bg-amber-400 animate-pulse' :
+                  supabaseStatus === 'error' ? 'bg-rose-500' : 'bg-slate-400'
+                }`}></span>
+                <span className="text-slate-500 dark:text-slate-400 font-medium">
+                  {supabaseStatus === 'connected' ? 'Supabase Cloud Synced' :
+                   supabaseStatus === 'syncing' ? 'Syncing...' :
+                   supabaseStatus === 'error' ? 'Sync Offline (Error)' : 'Local Memory Only'}
+                </span>
+              </div>
+              <span className="text-slate-400 dark:text-slate-500 text-[9px] truncate max-w-[200px]">
+                {syncMessage || (!isSupabaseConfigured ? 'Setup VITE_SUPABASE_* keys to connect!' : 'Local Storage active')}
+              </span>
+            </div>
+
+            {/* Application Core Scroll Frame Viewport */}
+            <main id="app-main-viewport" className="flex-1 overflow-y-auto px-5 py-5 space-y-5 bg-slate-50 dark:bg-slate-950 pb-20">
+              
+              <AnimatePresence mode="wait">
+                {/* VIEW A: CENTRAL DASHBOARD */}
+                {activeTab === 'dashboard' && (
+                  <motion.div
+                    key="dashboard-view"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="space-y-5"
+                  >
+                    {/* 1. TOP SUMMARY METRIC METERS */}
+                    <div id="dashboard-metric-grid" className="grid grid-cols-3 gap-3.5">
+                      {/* Revenue metrics */}
+                      <div 
+                        id="total-revenue-stat"
+                        onClick={() => { setActiveTab('invoices'); setInvoiceFilter('Paid'); }}
+                        className="cursor-pointer bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200/50 dark:border-slate-800/80 hover:border-indigo-500 dark:hover:border-indigo-400 transition-colors shadow-2xs"
+                      >
+                        <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold block leading-tight uppercase tracking-wider">Paid Recv</span>
+                        <div className="flex items-baseline gap-0.5 mt-1.5">
+                          <span className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white leading-none">${revenueThisMonth}</span>
                         </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-
-                {/* 3. DYNAMIC LIST 2: TODAY'S FOLLOW-UPS */}
-                <div id="today-followups-deck" className="space-y-2.5">
-                  <div className="flex justify-between items-center">
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500">
-                      📅 Today's Follow-ups
-                    </h3>
-                    <span className="text-[10px] font-mono font-semibold text-indigo-500 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 px-2 py-0.5 rounded-full">
-                      May 21
-                    </span>
-                  </div>
-
-                  <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1">
-                    {todaysFollowups.length === 0 ? (
-                      <div className="bg-white dark:bg-slate-900/50 border border-slate-100 dark:border-slate-800/60 p-5 rounded-2xl text-center">
-                        <UserCheck className="h-6 w-6 text-indigo-500 mx-auto mb-1.5" />
-                        <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">Schedule Fully Cleared</p>
-                        <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">Nothing else scheduled for today!</p>
+                        <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-semibold mt-1.5 block">Full Total</span>
                       </div>
-                    ) : (
-                      todaysFollowups.map((task) => (
-                        <div
-                          key={task.id}
-                          className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200/50 dark:border-slate-800/80 flex items-start gap-2.5 transition-all shadow-2xs"
-                        >
-                          <button
-                            id={`complete-task-${task.id}`}
-                            onClick={() => handleToggleFollowupCompleted(task.id)}
-                            className="mt-0.5 shrink-0 w-4.5 h-4.5 rounded-md border border-slate-300 dark:border-slate-700 flex items-center justify-center hover:bg-slate-100 dark:hover:bg-slate-800 text-transparent hover:text-slate-400 transition-all"
-                            title="Complete task"
+
+                      {/* Overdue Payments stats click actions for quick filtration */}
+                      <div 
+                        id="overdue-payments-stat"
+                        onClick={() => { setActiveTab('invoices'); setInvoiceFilter('Overdue'); }}
+                        className={`cursor-pointer bg-red-50/40 dark:bg-red-950/10 p-4 rounded-2xl border transition-colors shadow-2xs ${overdueData.count > 0 ? 'border-red-200 dark:border-red-900/40 shadow-xs' : 'border-slate-200/50 dark:border-slate-800/80'}`}
+                      >
+                        <span className="text-[10px] text-red-650 dark:text-red-400 font-bold block leading-tight uppercase tracking-wider">Overdue</span>
+                        <div className="flex items-baseline gap-0.5 mt-1.5">
+                          <span className="text-base sm:text-lg font-extrabold text-red-650 dark:text-red-500 leading-none">${overdueData.amount}</span>
+                        </div>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400 mt-1.5">
+                          {overdueData.count} pending
+                        </span>
+                      </div>
+
+                      {/* Followups Stat */}
+                      <div 
+                        id="today-followups-stat"
+                        className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200/50 dark:border-slate-800/80 shadow-2xs"
+                      >
+                        <span className="text-[10px] text-slate-500 dark:text-slate-400 font-bold block leading-tight uppercase tracking-wider">Tasks Today</span>
+                        <div className="flex items-baseline gap-0.5 mt-1.5">
+                          <span className="text-base sm:text-lg font-extrabold text-slate-900 dark:text-white leading-none">{followupsTodayCount}</span>
+                        </div>
+                        <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 mt-1.5">
+                          Incomplete
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* TWO COLUMN RESPONSIVE GRID - SIDE-BY-SIDE ON DESKTOP AND FLUID STACKED ON MOBILE */}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-1">
+                      
+                      {/* 2. DYNAMIC LIST 1: URGENT PAYMENTS DUE */}
+                      <div id="urgent-payments-deck" className="space-y-3">
+                        <div className="flex justify-between items-center">
+                          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 font-sans">
+                            ⚠️ Overdue Invoices Balance
+                          </h3>
+                          <button 
+                            type="button"
+                            onClick={() => setActiveTab('invoices')}
+                            className="text-[11px] text-indigo-600 hover:text-indigo-400 font-bold"
                           >
-                            <Check className="h-3 w-3" />
+                            View all
                           </button>
-
-                          <div className="flex-1 space-y-0.5">
-                            <div className="flex justify-between items-baseline">
-                              <h4 
-                                className="text-xs font-bold text-slate-800 dark:text-slate-200 cursor-pointer hover:underline"
-                                onClick={() => task.clientId && setSelectedClientId(task.clientId)}
-                              >
-                                {task.client ? task.client.name : "Custom Request"}
-                              </h4>
-                              <span className="text-[8px] font-mono text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/50 px-1.5 py-0.5 rounded font-bold">
-                                TODAY
-                              </span>
-                            </div>
-                            <p className="text-[11px] text-slate-600 dark:text-slate-400 line-clamp-2">
-                              {task.description}
-                            </p>
-                            
-                            {/* Short reminder options directly accessible */}
-                            <div className="flex items-center gap-2 pt-1.5">
-                              {task.client && (
-                                <>
-                                  <button
-                                    onClick={() => task.client && triggerWhatsApp(task.client)}
-                                    className="inline-flex items-center gap-1 text-[9px] font-bold text-emerald-600 hover:text-emerald-500 py-0.5 px-2 rounded-full bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900/30 transition-all hover:scale-105"
-                                  >
-                                    <MessageSquare className="h-2.5 w-2.5" /> WhatsApp
-                                  </button>
-                                  <button
-                                    onClick={() => task.client && triggerSMS(task.client)}
-                                    className="inline-flex items-center gap-1 text-[9px] font-bold text-blue-600 hover:text-blue-500 py-0.5 px-2 rounded-full bg-blue-50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/30 transition-all hover:scale-105"
-                                  >
-                                    <Phone className="h-2.5 w-2.5" /> SMS
-                                  </button>
-                                </>
-                              )}
-                            </div>
-                          </div>
                         </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              </motion.div>
-            )}
+
+                        <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+                          {urgentPayments.length === 0 ? (
+                            <div className="bg-white dark:bg-slate-900/50 border border-slate-100 dark:border-slate-800/60 p-6 rounded-2xl text-center">
+                              <Check className="h-6 w-6 text-emerald-500 mx-auto mb-2" />
+                              <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">Zero Overdue Balances</p>
+                              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">All clients are fully clear!</p>
+                            </div>
+                          ) : (
+                            urgentPayments.slice(0, 5).map((invoice) => (
+                              <div 
+                                key={invoice.id}
+                                className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200/50 dark:border-slate-800/80 hover:border-slate-300 dark:hover:border-slate-700 flex justify-between items-center transition-all cursor-pointer shadow-3xs"
+                                onClick={() => invoice.clientId && setSelectedClientId(invoice.clientId)}
+                              >
+                                <div className="space-y-1">
+                                  <h4 className="text-xs font-extrabold text-slate-850 dark:text-slate-200">
+                                    {invoice.client ? invoice.client.name : "Walk-in Customer"}
+                                  </h4>
+                                  <div className="flex items-center gap-1.5 text-[10px] text-slate-400 dark:text-slate-500 font-mono">
+                                    <span>Due {formatDate(invoice.dueDate)}</span>
+                                    <span>•</span>
+                                    <span className="text-red-500/80 italic">{invoice.description}</span>
+                                  </div>
+                                </div>
+                                
+                                <div className="text-right flex items-center gap-2">
+                                  <div>
+                                    <span className="text-xs font-extrabold text-slate-900 dark:text-white block">${invoice.amount}</span>
+                                    <span className={`text-[8px] px-2 py-0.5 rounded-full font-bold uppercase tracking-wider ${
+                                      invoice.status === 'Overdue' 
+                                        ? 'bg-red-100 dark:bg-red-950/50 text-red-600' 
+                                        : 'bg-amber-100 dark:bg-amber-950/50 text-amber-600'
+                                    }`}>
+                                      {invoice.status}
+                                    </span>
+                                  </div>
+                                  <ChevronRight className="h-4 w-4 text-slate-300 dark:text-slate-600" />
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+
+                      {/* 3. DYNAMIC LIST 2: TODAY'S FOLLOW-UPS */}
+                      <div id="today-followups-deck" className="space-y-3">
+                        <div className="flex justify-between items-center">
+                          <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 dark:text-slate-500 font-sans">
+                            📅 Pending Scheduling Items
+                          </h3>
+                          <span className="text-[10px] font-mono font-bold text-indigo-500 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950 px-2 py-0.5 rounded-full">
+                            CRM Agenda
+                          </span>
+                        </div>
+
+                        <div className="space-y-2.5 max-h-[380px] overflow-y-auto pr-1">
+                          {todaysFollowups.length === 0 ? (
+                            <div className="bg-white dark:bg-slate-900/50 border border-slate-100 dark:border-slate-800/60 p-6 rounded-2xl text-center">
+                              <UserCheck className="h-6 w-6 text-indigo-500 mx-auto mb-2" />
+                              <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">Schedule Fully Cleared</p>
+                              <p className="text-[10px] text-slate-400 dark:text-slate-500 mt-0.5">Nothing else scheduled for today!</p>
+                            </div>
+                          ) : (
+                            todaysFollowups.map((task) => (
+                              <div
+                                key={task.id}
+                                className="bg-white dark:bg-slate-900 p-3.5 rounded-2xl border border-slate-200/50 dark:border-slate-800/80 flex items-start gap-3 transition-all shadow-3xs"
+                              >
+                                <button
+                                  id={`complete-task-${task.id}`}
+                                  onClick={() => handleToggleFollowupCompleted(task.id)}
+                                  className="mt-0.5 shrink-0 w-4.5 h-4.5 rounded-md border border-slate-350 dark:border-slate-700 flex items-center justify-center hover:bg-slate-150 dark:hover:bg-slate-800 text-transparent hover:text-slate-400 transition-all cursor-pointer"
+                                  title="Complete task"
+                                >
+                                  <Check className="h-3 w-3" />
+                                </button>
+
+                                <div className="flex-1 space-y-1">
+                                  <div className="flex justify-between items-baseline">
+                                    <h4 
+                                      className="text-xs font-extrabold text-slate-850 dark:text-slate-200 cursor-pointer hover:underline"
+                                      onClick={() => task.clientId && setSelectedClientId(task.clientId)}
+                                    >
+                                      {task.client ? task.client.name : "Custom Request"}
+                                    </h4>
+                                    <span className="text-[8px] font-mono text-indigo-600 dark:text-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/50 px-1.5 py-0.5 rounded font-bold uppercase tracking-wider">
+                                      Agenda
+                                    </span>
+                                  </div>
+                                  <p className="text-[11px] text-zinc-600 dark:text-slate-400 leading-relaxed">
+                                    {task.description}
+                                  </p>
+                                  
+                                  {/* Short reminder options directly accessible */}
+                                  <div className="flex items-center gap-2 pt-1.5">
+                                    {task.client && (
+                                      <>
+                                        <button
+                                          onClick={() => task.client && triggerWhatsApp(task.client)}
+                                          className="inline-flex items-center gap-1 text-[9px] font-extrabold text-emerald-600 hover:text-emerald-500 py-0.5 px-2 rounded-full bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900/30 transition-all cursor-pointer hover:scale-105"
+                                        >
+                                          <MessageSquare className="h-2.5 w-2.5" /> WhatsApp
+                                        </button>
+                                        <button
+                                          onClick={() => task.client && triggerSMS(task.client)}
+                                          className="inline-flex items-center gap-1 text-[9px] font-extrabold text-blue-600 hover:text-blue-500 py-0.5 px-2 rounded-full bg-blue-50 dark:bg-blue-950/30 border border-blue-100 dark:border-blue-900/30 transition-all cursor-pointer hover:scale-105"
+                                        >
+                                          <Phone className="h-2.5 w-2.5" /> SMS
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+
+                    </div>
+                  </motion.div>
+                )}
 
             {/* VIEW B: CLIENT DIRECTORY */}
             {activeTab === 'clients' && (
@@ -1252,46 +1589,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Supabase Cloud Connection Panel */}
-                <div id="settings-supabase-panel" className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200/50 dark:border-slate-800/80 space-y-3">
-                  <h3 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5 uppercase tracking-wider border-b border-slate-150/40 pb-2">
-                    <Building className="h-4.5 w-4.5 text-blue-500" /> Supabase Database Connection
-                  </h3>
-                  
-                  <div className="text-[10px] leading-relaxed text-slate-600 dark:text-slate-400 space-y-2">
-                    <p>
-                      This micro-CRM implements an <strong className="text-indigo-600 dark:text-indigo-400">offline-first cloud synchronization architecture</strong>. If Supabase keys are configured, all clients, invoices, and schedule checklists sync automatically.
-                    </p>
-                    <div className="p-3 bg-slate-50 dark:bg-slate-950 rounded-lg space-y-1.5 border border-slate-200/50 dark:border-slate-800/80">
-                      <div className="flex justify-between items-center text-[9px]">
-                        <span className="font-semibold text-slate-400 uppercase font-mono">Connection Status:</span>
-                        <span className={`px-2 py-0.5 rounded-full font-bold uppercase text-[9px] ${
-                          supabaseStatus === 'connected' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-400' :
-                          supabaseStatus === 'syncing' ? 'bg-amber-100 text-amber-800 dark:bg-amber-950/40 dark:text-amber-400' :
-                          supabaseStatus === 'error' ? 'bg-red-100 text-red-800 dark:bg-red-950/40 dark:text-red-400' :
-                          'bg-slate-150 text-slate-600 dark:bg-slate-905 dark:text-slate-400'
-                        }`}>
-                          {supabaseStatus === 'connected' ? 'Active & Synced' :
-                           supabaseStatus === 'syncing' ? 'Syncing...' :
-                           supabaseStatus === 'error' ? 'Connection Error' :
-                           'Offline Only'}
-                        </span>
-                      </div>
-                      <div className="text-[9px] text-slate-400 font-mono flex flex-col gap-1">
-                        <span>URL: <code className="text-[8px] text-indigo-600 dark:text-slate-300 truncate block max-w-full">{(import.meta as any).env.VITE_SUPABASE_URL || 'Not specified'}</code></span>
-                        <span>Key: <code className="text-[8px] dark:text-slate-300">{(import.meta as any).env.VITE_SUPABASE_ANON_KEY ? 'Active (Configured)' : 'Not configured'}</code></span>
-                      </div>
-                    </div>
-                    
-                    <div className="space-y-1 font-mono text-[9px] text-slate-400 mt-2 bg-indigo-50/20 dark:bg-indigo-950/10 p-2.5 rounded border border-indigo-150/10 dark:border-indigo-950/30">
-                      <p className="font-semibold text-indigo-500">🚀 Production Deployment Tips:</p>
-                      <ol className="list-decimal pl-3.5 space-y-1 mt-0.5 text-slate-500 dark:text-slate-400">
-                        <li>Make sure to execute queries from the generated <code className="text-indigo-600 dark:text-indigo-400 font-mono">/supabase_schema.sql</code> file inside your Supabase SQL editor.</li>
-                        <li>To synchronize Vercel, define both connection variables: <code className="text-emerald-500 font-bold font-mono">VITE_SUPABASE_URL</code> and <code className="text-emerald-500 font-bold font-mono">VITE_SUPABASE_ANON_KEY</code> in project configs.</li>
-                      </ol>
-                    </div>
-                  </div>
-                </div>
+
 
                 <div className="flex justify-between items-center bg-slate-100 dark:bg-slate-900 p-4 rounded-xl">
                   <p className="text-[10px] text-slate-500 leading-normal">Need to wipe local data and restart testing templates?</p>
@@ -1867,8 +2165,9 @@ export default function App() {
             </motion.div>
           )}
         </AnimatePresence>
-
-      </div>
-    </div>
+      </>
+    )}
+  </div>
+</div>
   );
 }

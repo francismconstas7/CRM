@@ -1,0 +1,6 @@
+{
+  "name": "Micro CRM",
+  "description": "Mobile-first, dead-simple CRM tailored for solopreneurs to manage clients, track overdue payments, and quickly follow up.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
